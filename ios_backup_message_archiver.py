@@ -1,4 +1,4 @@
-# Copyright (c) 2015 Brett Whitelaw
+# Copyright (c) 2015-2017 Brett Whitelaw
 # All rights reserved.
 # Unauthorized redistribution prohibited.
 
@@ -10,10 +10,14 @@ and all the contacts that are in the chat.  Image attachments are inserted
 into the HTML file and all attachments have a link inserted into the HTML for
 ease of access.  As much information as possible is inserted into the HTML,
 like timestamps (including read time, when known) and messaging service (SMS
-or iMessage).
+or iMessage).  This script now, also, reads the address book database from the
+backup and uses that information to map the phone number or email address in the
+message to a first and last name or the company name.  These are used in the
+HTML and file names.
 
 :Author: Brett Whitelaw (GitHub: bwhitela)
 :Date: 2015/12/31
+:Last Update: 2017/05/29
 """
 
 import hashlib
@@ -27,7 +31,8 @@ import time
 
 
 MAGIC_DATE_NUMBER = 978307200
-DB_FILE_NAME = '3d0d7e5fb2ce288813306e4d4636395e047a3d28'
+SMS_DB_FILE_NAME = '3d0d7e5fb2ce288813306e4d4636395e047a3d28'
+CONTACTS_DB_FILE_NAME = '31bb7ba8914766d4ba40d6dfb6113c8b614be442'
 
 
 # A chat could have 1 or more people (group messaging) and a single person could be in more than 1 chat.
@@ -64,7 +69,7 @@ def get_handle_to_contact(filename, log):
 
     :Returns:
         A dictionary mapping contact handle ID (integer) to contact information
-        (phone number ('+12223334444') or email as a string).
+        (phone number ('12223334444') or email as a string).
 
     :Exceptions:
         Standard exceptions from sqlite3 library.
@@ -78,7 +83,13 @@ def get_handle_to_contact(filename, log):
     # Create a mapping from handle to contact information.
     handle_contact_map = {}
     for handle_id, contact in result:
+        if contact.startswith('+'):
+            contact = contact.lstrip('+')
         handle_contact_map[handle_id] = contact
+    # Handle a new oddity seen in iOS 10 where a handle ID is 0 in a message
+    # but is not in handle table.
+    if not handle_contact_map.get(0):
+        handle_contact_map[0] = 'me-or-null'
     return handle_contact_map
 
 def get_contacts_in_chat(filename, log):
@@ -215,6 +226,89 @@ def get_message_attachments(filename, log):
                                                            orig_filename))
     return attachments
 
+
+def normalize_phone_number(phone_number):
+    """Attempts to normalize the phone number provided.
+
+    This will remove all typical separator charactors and then attach the
+    country code of '1' in the event a country code doesn't appear to be
+    present.
+
+    :Parameters:
+        - `phone_number`: The phone number to be normalized (as a string).
+
+    :Returns:
+        A string that represents the normalized version of the phone number
+        provided.
+
+    :Exceptions:
+        None.
+    """
+    if phone_number.startswith('+'):
+        phone_number = phone_number.lstrip('+')
+    phone_number = phone_number.replace('(', '').replace(')', '')
+    phone_number = phone_number.replace('-', '').replace('.', '')
+    phone_number = phone_number.replace(' ', '').replace(u'\xa0', '')
+    if len(phone_number) == 10:
+        phone_number = '1' + phone_number
+    return phone_number
+
+def get_contacts_map(filename, log):
+    """Get information from the SQLite DB about contacts.
+
+    :Parameters:
+        - `filename`: Path to the SQLite DB file (as a string).
+        - `log`: Log object.
+
+    :Returns:
+        A dictionary mapping a contact identifier (string), that being a
+        normalized phone number or an email address, to a name, that being a
+        first and last name, if available, or a company name (string).
+
+    :Exceptions:
+        Standard exceptions from sqlite3 library.
+    """
+    contacts_map = {}
+
+    sql = """SELECT ABMultiValue.value AS Email, ABPerson.first AS FirstName,
+    ABPerson.last AS LastName, ABPerson.organization as Organization
+    FROM ABMultiValue
+    LEFT JOIN ABPerson ON ABMultiValue.record_id = ABPerson.ROWID
+    WHERE ABMultiValue.property = 4;"""
+    conn = sqlite3.connect(filename)
+    c = conn.cursor()
+    c.execute(sql)
+    result = c.fetchall()
+    conn.close()
+    for email, first, last, org in result:
+        names = [name for name in [first, last] if name is not None]
+        if not names:
+            contact = org
+        else:
+            contact = ' '.join(names)
+        contacts_map[email] = contact
+
+    sql = """SELECT ABMultiValue.value AS Number, ABPerson.first AS FirstName,
+    ABPerson.last AS LastName, ABPerson.organization as Organization
+    FROM ABMultiValue
+    LEFT JOIN ABPerson ON ABMultiValue.record_id = ABPerson.ROWID
+    WHERE ABMultiValue.property = 3;"""
+    conn = sqlite3.connect(filename)
+    c = conn.cursor()
+    c.execute(sql)
+    result = c.fetchall()
+    conn.close()
+    for number, first, last, org in result:
+        names = [name for name in [first, last] if name is not None]
+        if not names:
+            contact = org
+        else:
+            contact = ' '.join(names)
+        contacts_map[normalize_phone_number(number)] = contact
+
+    return contacts_map
+
+
 def parse_cmd_line():
     """Parse the options and arguments from the command line.
 
@@ -285,7 +379,12 @@ def main():
 
     # Paths from command line.
     backup_dir = args[0]
-    db_file = os.path.join(backup_dir, DB_FILE_NAME)
+    sms_db_file = os.path.join(backup_dir, SMS_DB_FILE_NAME)
+    if not os.access(sms_db_file, os.F_OK):
+        sms_db_file = os.path.join(backup_dir, SMS_DB_FILE_NAME[0:2], SMS_DB_FILE_NAME)
+    contacts_db_file = os.path.join(backup_dir, CONTACTS_DB_FILE_NAME)
+    if not os.access(contacts_db_file, os.F_OK):
+        contacts_db_file = os.path.join(backup_dir, CONTACTS_DB_FILE_NAME[0:2], CONTACTS_DB_FILE_NAME)
     destination_dir = opts.output_dir
 
     # Someone didn't make the destination directory yet.
@@ -293,14 +392,18 @@ def main():
         os.mkdir(destination_dir)
 
     # SQLite data.
-    contacts_in_chat = get_contacts_in_chat(db_file, log)
-    handle_contact_map = get_handle_to_contact(db_file, log)
-    conversations = get_chat_coversations(db_file, log)
-    attachments = get_message_attachments(db_file, log)
+    contacts_in_chat = get_contacts_in_chat(sms_db_file, log)
+    handle_contact_map = get_handle_to_contact(sms_db_file, log)
+    conversations = get_chat_coversations(sms_db_file, log)
+    attachments = get_message_attachments(sms_db_file, log)
+    contacts_map = get_contacts_map(contacts_db_file, log)
 
     for id, conversation in conversations.iteritems():
-        chat_contacts = [handle_contact_map[h].lstrip('+') for h in contacts_in_chat[id]]
-        filebase = '%s_%s' % (id, '_'.join(chat_contacts))
+        chat_contacts = [handle_contact_map[h] for h in contacts_in_chat[id]]
+        chat_contacts = [contacts_map.get(contact, contact)
+                         for contact in chat_contacts]
+        filebase = '%s_%s' % (id, '_'.join(['-'.join(contact.split(' '))
+                                            for contact in chat_contacts]))
         filename = filebase + '.html'
         filepath = os.path.join(destination_dir, filename)
         attachment_dir = os.path.join(destination_dir, filebase)
@@ -314,10 +417,11 @@ def main():
 
                     # Name and service:
                     if message['is_from_me']:
-                        my_string = '<dt class="sender_me">Me (%s)</dt>' % (message['service'],)
+                        my_string = '<dt class="sender_me">Me [%s]</dt>' % (message['service'],)
                     else:
-                        contact = handle_contact_map[message['handle_id']].lstrip('+')
-                        my_string = '<dt class="sender_them">%s (%s)</dt>' % (contact, message['service'])
+                        contact = handle_contact_map[message['handle_id']]
+                        contact_name = contacts_map.get(contact, contact)
+                        my_string = '<dt class="sender_them">%s (%s) [%s]</dt>' % (contact_name, contact, message['service'])
                     message_parts.append(my_string)
 
                     # Sent time and message text:
@@ -335,11 +439,13 @@ def main():
                         for attachment_filename, true_filename in attachments[message['message_id']]:
                             unique_filename = '%s-%s' % (attachment_filename, true_filename)
                             file_from = os.path.join(backup_dir, attachment_filename)
-                            file_to = os.path.join(attachment_dir, unique_filename)
                             if not os.access(file_from, os.F_OK):
-                                my_string = '<dd class="attachment">Missing attachment (%s).</dd>' % (unique_filename,)
-                                message_parts.append(my_string)
-                                continue
+                                file_from = os.path.join(backup_dir, attachment_filename[0:2], attachment_filename)
+                                if not os.access(file_from, os.F_OK):
+                                    my_string = '<dd class="attachment">Missing attachment (%s).</dd>' % (unique_filename,)
+                                    message_parts.append(my_string)
+                                    continue
+                            file_to = os.path.join(attachment_dir, unique_filename)
                             shutil.copyfile(file_from, file_to)
                             file_link = os.path.join(filebase, unique_filename)
                             if unique_filename.split('.')[-1].lower() in ['jpeg', 'jpg', 'png', 'gif', 'svg']:
