@@ -31,6 +31,7 @@ import time
 
 
 MAGIC_DATE_NUMBER = 978307200
+NANOSECONDS = 1000000000
 SMS_DB_FILE_NAME = '3d0d7e5fb2ce288813306e4d4636395e047a3d28'
 CONTACTS_DB_FILE_NAME = '31bb7ba8914766d4ba40d6dfb6113c8b614be442'
 
@@ -144,7 +145,8 @@ def get_chat_coversations(filename, log):
     sql = """SELECT %s
     FROM `message`
     INNER JOIN `chat_message_join`
-    ON message.ROWID=chat_message_join.message_id;"""
+    ON message.ROWID=chat_message_join.message_id
+    ORDER BY ROWID ASC;"""
     conn = sqlite3.connect(filename)
     c = conn.cursor()
     c.execute(sql % (', '.join(message_and_chat_message_join),))
@@ -154,6 +156,12 @@ def get_chat_coversations(filename, log):
     conversations = {}
     for message_row in result:
         message_info = dict(zip(message_and_chat_message_join, message_row))
+        # Dates appear to be in nanoseconds, now. Probably changed around iOS
+        # 11. This code wants seconds, as does Python.
+        if message_info['date'] > NANOSECONDS:
+            message_info['date'] = int(message_info['date'] / NANOSECONDS)
+        if message_info['date_read'] > NANOSECONDS:
+            message_info['date_read'] = int(message_info['date_read'] / NANOSECONDS)
         if not message_info['chat_id'] in conversations:
             conversations[message_info['chat_id']] = []
         conversations[message_info['chat_id']].append(message_info)

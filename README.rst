@@ -53,7 +53,9 @@ your employer might enforce), this script will not work.
 Notes About Changes
 -------------------
 
-As of this commit, this script is functioning with backups from iOS 10.  It
+As of this commit, this script is functioning with backups from iOS 11.  It
 should function with previous versions as it tries to be smart about where to
-find necessary files, which have changed locations.  I have not tested this
-iteration with any backups before iOS 10.
+find necessary files, which changed locations in iOS 10, as well as inspecting
+the date fields, and adjusting, to account for a change from seconds to
+nanoseconds in iOS 11. I have not tested this iteration with any backups before
+iOS 11.
