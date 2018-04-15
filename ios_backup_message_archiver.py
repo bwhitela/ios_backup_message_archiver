@@ -43,14 +43,17 @@ CHAT_HANDLE_JOIN_FIELDS = ['chat_id',   # An integer used to identify the chat.
 CHAT_MESSAGE_JOIN_FIELDS = ['chat_id',    # An integer used to identify the chat.
                             'message_id'] # Integer identifier for a single message sent/received.
 
-MESSAGE_FIELDS = ['ROWID',      # Used elsewhere as message_id (integer).
-                  'text',       # Text from the message.
+CHAT_FIELDS = ['chat_identifier'] # A string used to identify the chat, SMS and iMessages together.
+               # 'ROWID'          # Used elsewhere as chat_id (integer).
+
+MESSAGE_FIELDS = ['text',       # Text from the message.
                   'handle_id',  # An integer identifier that maps to a contact / phone number.
                   'service',    # SMS or iMessage.
                   'date',       # Date sent. Epoch minus magic date number.
                   'date_read',  # Date read (probably 0 if unknown). Epoch minus magic date number.
                   'is_from_me', # 1 = I sent it, 0 = I received it.
                   'is_read']    # 1 = the message was read, 0 = the message was not read (or we don't know).
+                  # 'ROWID'     # Used elsewhere as message_id (integer).
 
 HANDLE_FIELDS = ['ROWID', # Used elsewhere as handle_id (integer).
                  'id']    # Phone number or email.
@@ -101,25 +104,30 @@ def get_contacts_in_chat(filename, log):
         - `log`: Log object.
 
     :Returns:
-        A dictionary mapping a chat ID (integer) to a list of contacts (handle
-        ID (integer)).
+        A dictionary mapping a chat identifier (string) to a list of contacts
+        (handle ID (integer)).
 
     :Exceptions:
         Standard exceptions from sqlite3 library.
     """
     # Users in a chat.
+    chat_and_chat_handle_join = CHAT_HANDLE_JOIN_FIELDS + CHAT_FIELDS
+    sql = """SELECT %s
+    FROM `chat_handle_join`
+    INNER JOIN `chat`
+    ON chat_handle_join.chat_id=chat.ROWID
+    ORDER BY chat_identifier ASC;"""
     conn = sqlite3.connect(filename)
     c = conn.cursor()
-    c.execute("SELECT %s FROM `chat_handle_join`;"
-              % (', '.join(CHAT_HANDLE_JOIN_FIELDS),))
+    c.execute(sql % (', '.join(chat_and_chat_handle_join),))
     result = c.fetchall()
     conn.close()
 
     contacts_in_chat = {}
-    for chat_id, handle_id in result:
-        if chat_id not in contacts_in_chat:
-            contacts_in_chat[chat_id] = []
-        contacts_in_chat[chat_id].append(handle_id)
+    for chat_id, handle_id, chat_identifier in result:
+        if chat_identifier not in contacts_in_chat:
+            contacts_in_chat[chat_identifier] = []
+        contacts_in_chat[chat_identifier].append(handle_id)
     return contacts_in_chat
 
 def get_chat_coversations(filename, log):
@@ -130,23 +138,25 @@ def get_chat_coversations(filename, log):
         - `log`: Log object.
 
     :Returns:
-        A dictionary mapping a chat ID (integer) to a list of dictionaries
-        that represent messages.  These contain a mapping of column name
-        to column data from 'message' and 'chat_message_join' tables.  It
+        A dictionary mapping a chat identifier (string) to a list of
+        dictionaries that represent messages.  These contain a mapping of column
+        name to column data from 'message' and 'chat_message_join' tables.  It
         looks something like:
-        {<chat_id>: [{'ROWID': <ROWID>, 'text': <text>, ...}, {...}, ...], ...}
+        {<chat_identifier>: [{'ROWID': <ROWID>, 'text': <text>, ...}, {...}, ...], ...}
 
     :Exceptions:
         Standard exceptions from sqlite3 library.
     """
     # [ROWID, text, handle_id, service, date, date_read, is_from_me, is_read,
     #  chat_id, message_id]
-    message_and_chat_message_join = MESSAGE_FIELDS + CHAT_MESSAGE_JOIN_FIELDS
+    message_and_chat_message_join = MESSAGE_FIELDS + CHAT_MESSAGE_JOIN_FIELDS + CHAT_FIELDS
     sql = """SELECT %s
     FROM `message`
     INNER JOIN `chat_message_join`
     ON message.ROWID=chat_message_join.message_id
-    ORDER BY ROWID ASC;"""
+    INNER JOIN `chat`
+    ON chat_message_join.chat_id=chat.ROWID
+    ORDER BY message_id ASC;"""
     conn = sqlite3.connect(filename)
     c = conn.cursor()
     c.execute(sql % (', '.join(message_and_chat_message_join),))
@@ -162,9 +172,9 @@ def get_chat_coversations(filename, log):
             message_info['date'] = int(message_info['date'] / NANOSECONDS)
         if message_info['date_read'] > NANOSECONDS:
             message_info['date_read'] = int(message_info['date_read'] / NANOSECONDS)
-        if not message_info['chat_id'] in conversations:
-            conversations[message_info['chat_id']] = []
-        conversations[message_info['chat_id']].append(message_info)
+        if not message_info['chat_identifier'] in conversations:
+            conversations[message_info['chat_identifier']] = []
+        conversations[message_info['chat_identifier']].append(message_info)
     return conversations
 
 def convert_attachment_name(name, log):
@@ -410,6 +420,9 @@ def main():
         chat_contacts = [handle_contact_map[h] for h in contacts_in_chat[id]]
         chat_contacts = [contacts_map.get(contact, contact)
                          for contact in chat_contacts]
+        # Because unique contact IDs are created for both SMS and iMessage on
+        # the same phone number, these need to be de-duped.
+        chat_contacts = list(set(chat_contacts))
         filebase = '%s_%s' % (id, '_'.join(['-'.join(contact.split(' '))
                                             for contact in chat_contacts]))
         filename = filebase + '.html'

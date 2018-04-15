@@ -9,14 +9,14 @@ Overview
 This Python script is meant to generate HTML archives of chats from an iOS
 backup.  Each chat (which can be with a single person or multiple) is created
 as a single HTML file with a similarly named directory for attachments.  The
-filenames, in this version, are named with the chat ID (used in the SQLite DB)
-and all the contacts that are in the chat.  Image attachments are inserted
-into the HTML file and all attachments have a link inserted into the HTML for
-ease of access.  As much information as possible is inserted into the HTML,
-like timestamps (including read time, when known) and messaging service (SMS
-or iMessage).  This script now, also, reads the address book database from the
-backup and uses that information to map the phone number or email address in the
-message to a first and last name or the company name.  These are used in the
+filenames, in this version, are named with the chat identifier (used in the
+SQLite DB) and all the contacts that are in the chat.  Image attachments are
+inserted into the HTML file and all attachments have a link inserted into the
+HTML for ease of access.  As much information as possible is inserted into the
+HTML, like timestamps (including read time, when known) and messaging service
+(SMS or iMessage).  This script now, also, reads the address book database from
+the backup and uses that information to map the phone number or email address in
+the message to a first and last name or the company name.  These are used in the
 HTML and file names.
 
 Usage
