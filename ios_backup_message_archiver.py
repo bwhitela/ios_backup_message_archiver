@@ -17,7 +17,7 @@ HTML and file names.
 
 :Author: Brett Whitelaw (GitHub: bwhitela)
 :Date: 2015/12/31
-:Last Update: 2017/05/29
+:Last Update: 2018/04/14
 """
 
 import hashlib
